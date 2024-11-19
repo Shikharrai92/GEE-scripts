@@ -1,0 +1,78 @@
+// MGIS Final project for GEOG 683, UNIVERSITY OF CALGARY
+// SCRIPT FOR LAND USE LAND COVER CLASSIFICATION COMPILED BY SHIKHAR RAI
+// AREA OF INTREST IS KATHMANDU VALLEY, IMGAE ACQUISITION DATE IS 2023
+//Supervised Classification using Sentinel 2A image
+
+// Load Sentinel 2A image
+var image = ee.ImageCollection('COPERNICUS/S2_SR')
+.filterDate('2023-01-01', '2023-12-30')
+// Pre-filter to get less cloudy granules.
+.filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 5))
+.filterBounds(roi)
+.median();
+
+var visParamsTrue = {bands: ['B4', 'B3', 'B2'], min: 0, max: 2500, gamma: 1.1};
+Map.addLayer(image, visParamsTrue, "Sentinel 2023");
+Map.centerObject(roi, 8);
+
+// // Create Training Data
+ var training = Water.merge(Urban_buildup).merge(Vegetation).merge(Roads).merge(Agricultural).merge(Baresoil);
+ print(training);
+ 
+var label = 'Class';
+var bands = ['B2', 'B3', 'B4', 'B8']; // These are bands with 10 meter spatial resolution. 
+var input = image.select(bands);
+
+// Overlay the points on the imagery to get training.
+var trainImage = input.sampleRegions({
+  collection: training,
+  properties: [label],
+  scale: 10
+});
+
+var trainingData = trainImage.randomColumn();
+var trainSet = trainingData.filter(ee.Filter.lessThan('random', 0.8));
+var testSet = trainingData.filter(ee.Filter.greaterThanOrEquals('random', 0.8));
+
+// Classification Model
+var classifier = ee.Classifier.smileCart().train(trainSet, label, bands);
+
+// Classify the image
+var classified = input.classify(classifier);
+print(classified.getInfo());
+
+// Define a palette for the classification.
+var landcoverPalette = [
+  '253494', //Water (0)
+  '969696', //Vegetation (1)
+  'FF8000', //Baresoil(2)
+  '006837', //Agricultiral (3)
+  '000000', //Urban_buildup (4)
+  '7FFF00', // Roads (5)
+];
+
+Map.addLayer(classified, {palette: landcoverPalette, min: 0, max: 5}, 'classification');
+
+// Accuracy Assessment
+//Classify the testingSet and get a confusion matrix.
+var confusionMatrix = ee.ConfusionMatrix(testSet.classify(classifier)
+    .errorMatrix({
+      actual: 'Class', 
+      predicted: 'classification'
+    }));
+
+print('Confusion matrix:', confusionMatrix);
+print('Overall Accuracy:', confusionMatrix.accuracy());
+print('Producers Accuracy:', confusionMatrix.producersAccuracy());
+print('Consumers Accuracy:', confusionMatrix.consumersAccuracy());
+// Export classified map to Google Drive
+Export.image.toDrive({
+  image: classified,
+  description: 'Sentinel_2_Classified_CART',
+  scale: 10,
+  region: roi,
+  maxPixels: 1e13,
+});
+
+
+
